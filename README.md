@@ -1,62 +1,61 @@
 # PDF to Markdown
 
-A premium, skeuomorphic desktop application for converting PDF documents into clean, structured Markdown. Built with **Tauri**, **React**, and **TypeScript**.
+This is a desktop application built to convert PDF documents into clean, structured Markdown. It uses Tauri for the desktop environment and React for the interface, focusing on a tactile, skeuomorphic design.
 
 ![App Screenshot](src/assets/image.png)
 
-## ✨ Features
+## Core Features
 
-- **High-Fidelity Conversion**: Extract text and layout from PDFs with precision.
-- **Skeuomorphic Design**: A tactile, premium user interface with liquid glass aesthetics and organic textures.
-- **OCR Support**: Built-in Optical Character Recognition (via Tesseract.js) for scanned documents.
-- **Batch Processing**: Drag and drop multiple files to process them in one go.
-- **Project Management**: Organize your documents into projects for better workflow.
-- **Real-time Preview**: View the generated Markdown side-by-side with your original document.
-- **Preserve Layout**: Option to maintain the original document's structure during conversion.
+- **Accurate Conversion**: Designed to extract text and preserve document layouts as much as possible.
+- **Skeuomorphic Interface**: A custom-built UI that uses organic textures and liquid glass effects.
+- **OCR Integration**: Uses Tesseract.js to handle text extraction from scanned documents.
+- **Batch Processing**: Supports dragging and dropping multiple files for concurrent processing.
+- **Project Structure**: A sidebar system to keep documents organized into different projects.
+- **Live Preview**: Side-by-side view to check the Markdown output against the source PDF.
 
-## 🚀 Getting Started
+## Getting Started
 
 ### Prerequisites
 
-- **Node.js**: Latest LTS version
-- **Rust**: Latest stable version (required for Tauri)
-- **System Dependencies**: See [Tauri Prerequisites](https://tauri.app/v1/guides/getting-started/prerequisites)
+You will need the following installed on your system:
+- **Node.js**: The latest LTS version is recommended.
+- **Rust**: Required for the Tauri backend.
+- **System Dependencies**: You may need specific libraries depending on your OS. Refer to the [Tauri setup guide](https://tauri.app/v1/guides/getting-started/prerequisites) for details.
 
 ### Installation
 
 1. Clone the repository:
    ```bash
-   git clone <repository-url>
+   git clone https://github.com/mvxbn6usr1/pdf2mkdwn.git
    cd pdf2mkdwn
    ```
 
-2. Install dependencies:
+2. Install the project dependencies:
    ```bash
    npm install
    ```
 
-3. Run in development mode:
+3. Start the application in development mode:
    ```bash
    npm run tauri:dev
    ```
 
-## 🛠️ Tech Stack
+## Development and Tech Stack
 
-- **Frontend**: React 19, Vite, TypeScript
-- **Backend/Desktop**: Tauri (Rust)
-- **PDF Processing**: MuPDF, PDF.js
-- **OCR**: Tesseract.js
-- **Icons**: Lucide React
-- **Styling**: Vanilla CSS (Skeuomorphic & Liquid Glass design)
+- **Frontend**: React 19 and Vite with TypeScript.
+- **Desktop Wrapper**: Tauri (Rust).
+- **Processing**: MuPDF and PDF.js for document handling.
+- **OCR**: Tesseract.js.
+- **Styling**: Standard CSS with a focus on custom textures and shadows.
 
-## 📦 Building
+## Building for Production
 
-To create a production build for your OS:
+To create a native executable for your current platform, run:
 
 ```bash
 npm run tauri:build
 ```
 
-## 📄 License
+## License
 
 MIT © mvxbn6usr1
