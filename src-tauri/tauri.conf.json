@@ -1,0 +1,62 @@
+{
+  "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
+  "productName": "PDF2Markdown",
+  "version": "0.1.0",
+  "identifier": "com.pdf2markdown.converter",
+  "build": {
+    "frontendDist": "../dist",
+    "devUrl": "http://localhost:5173",
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "PDF to Markdown Converter",
+        "width": 1230,
+        "height": 650,
+        "minWidth": 900,
+        "minHeight": 600,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
+        "trafficLightPosition": {
+          "x": 16,
+          "y": 28
+        },
+        "transparent": true
+      }
+    ],
+    "macOSPrivateApi": true,
+    "security": {
+      "csp": null,
+      "assetProtocol": {
+        "scope": [
+          "$HOME/**",
+          "$DOCUMENT/**",
+          "$PICTURES/**",
+          "$DOWNLOAD/**"
+        ]
+      }
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/64x64.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "category": "Utility",
+    "shortDescription": "Convert PDF documents to Markdown",
+    "longDescription": "A powerful PDF to Markdown converter with OCR support, Vision AI integration, and batch processing capabilities."
+  },
+  "plugins": {}
+}
