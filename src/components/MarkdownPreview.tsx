@@ -4,6 +4,7 @@ import remarkGfm from 'remark-gfm';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Eye, Code, Copy, Download, Check } from 'lucide-react';
+import { open } from '@tauri-apps/plugin-shell';
 import logo from '../assets/logo.png';
 import type { PDFFile, ExtractedImage } from '../types';
 import { downloadMarkdown, copyToClipboard } from '../utils/exportUtils';
@@ -126,6 +127,20 @@ export function MarkdownPreview({ file }: MarkdownPreviewProps) {
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
+                a({ href, children, ...props }) {
+                  const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {
+                    // Check if it's an external link (http/https)
+                    if (href && (href.startsWith('http://') || href.startsWith('https://'))) {
+                      e.preventDefault();
+                      open(href);
+                    }
+                  };
+                  return (
+                    <a href={href} onClick={handleClick} {...props}>
+                      {children}
+                    </a>
+                  );
+                },
                 code({ className, children, ...props }) {
                   const match = /language-(\w+)/.exec(className || '');
                   const isInline = !match;
