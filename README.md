@@ -9,6 +9,10 @@ Despite the rich interface and OCR capabilities, the compiled macOS application 
 
 ![App Screenshot](src/assets/image.png)
 
+## Downloads
+
+You can find the latest compiled versions for macOS (Apple Silicon) on the [Releases page](https://github.com/mvxbn6usr1/pdf2mkdwn/releases).
+
 ## Core Features
 
 - **Accurate Conversion**: Designed to extract text and preserve document layouts as much as possible.
@@ -68,4 +72,10 @@ The resulting macOS bundle is notably small (18.5 MB) thanks to Tauri's use of t
 
 ## License
 
-MIT © mvxbn6usr1
+This project is licensed under the **GNU Affero General Public License v3.0 (AGPL-3.0)**. 
+
+This licensing choice is required due to the integration of **MuPDF**, which is licensed under AGPL-3.0. By using this application or its source code, you agree to abide by the terms of the AGPL-3.0, which include making the source code of any derivative works or network-interfacing versions available to the community.
+
+Full details can be found in the [LICENSE](LICENSE) file.
+
+© 2026 mvxbn6usr1
