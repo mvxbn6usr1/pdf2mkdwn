@@ -444,7 +444,129 @@ export function canvasToBase64(canvas: HTMLCanvasElement): string {
 }
 
 /**
+ * Extract mathematical equations from a page image.
+ * Uses targeted prompts to get just the math, not full OCR replacement.
+ */
+export async function extractMathFromImage(
+  imageBase64: string,
+  apiKey: string
+): Promise<{ equations: string[]; success: boolean }> {
+  try {
+    const result = await callIsaacAPI(
+      imageBase64,
+      `You are a mathematical expression extractor. Find ALL mathematical equations, formulas, and expressions on this page.
+
+For each equation found, output it as proper LaTeX.
+
+Rules:
+1. Output ONLY the equations, one per line
+2. Use LaTeX syntax: \\alpha, \\beta, \\sum, \\int, \\frac{}{}, etc.
+3. Use $ for inline math, $$ for display equations
+4. Include equation numbers if present (e.g., "(1)", "(2.3)")
+5. Preserve all subscripts and superscripts correctly
+6. Do NOT include surrounding prose text
+7. If no equations found, output: NONE
+
+Example output:
+$$E = mc^2$$
+$$\\int_0^\\infty e^{-x^2} dx = \\frac{\\sqrt{\\pi}}{2}$$
+$\\alpha + \\beta = \\gamma$`,
+      apiKey,
+      512
+    );
+
+    const outputText = result.output?.text?.trim() || '';
+
+    if (outputText === 'NONE' || outputText.length < 5) {
+      return { equations: [], success: true };
+    }
+
+    // Parse equations - each line should be an equation
+    const lines = outputText.split('\n').filter(line => line.trim());
+    const equations: string[] = [];
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      // Skip meta-text from the model
+      if (trimmed.toLowerCase().includes('here are') ||
+          trimmed.toLowerCase().includes('equation') && !trimmed.includes('$') ||
+          trimmed.toLowerCase().includes('found')) {
+        continue;
+      }
+      // Keep lines that have math delimiters or LaTeX commands
+      if (trimmed.includes('$') || trimmed.includes('\\')) {
+        equations.push(trimmed);
+      }
+    }
+
+    console.log(`[Isaac] Extracted ${equations.length} equations from page`);
+    return { equations, success: true };
+  } catch (error) {
+    console.warn('[Isaac] Math extraction failed:', error);
+    return { equations: [], success: false };
+  }
+}
+
+/**
+ * Merge Vision AI extracted equations into MuPDF text.
+ * Replaces garbled math regions with properly formatted LaTeX.
+ */
+function mergeEquationsIntoText(
+  mupdfText: string,
+  equations: string[],
+  garbledPatterns: RegExp[]
+): string {
+  if (equations.length === 0) {
+    return mupdfText;
+  }
+
+  let result = mupdfText;
+  let equationIndex = 0;
+
+  // Replace garbled patterns with extracted equations
+  for (const pattern of garbledPatterns) {
+    if (equationIndex >= equations.length) break;
+
+    // Find matches for this garbled pattern
+    const matches = result.match(pattern);
+    if (matches) {
+      for (const match of matches) {
+        if (equationIndex >= equations.length) break;
+
+        // Replace the garbled text with the clean equation
+        result = result.replace(match, equations[equationIndex]);
+        equationIndex++;
+      }
+    }
+  }
+
+  // If we still have unused equations, append them as a note
+  if (equationIndex < equations.length) {
+    const remaining = equations.slice(equationIndex);
+    console.log(`[Isaac] ${remaining.length} equations could not be placed inline, will append`);
+
+    // Find a good insertion point - after the first heading or at the start
+    const headingMatch = result.match(/^(#+\s+[^\n]+\n)/m);
+    if (headingMatch) {
+      const insertPos = result.indexOf(headingMatch[0]) + headingMatch[0].length;
+      const equationBlock = '\n\n' + remaining.join('\n\n') + '\n\n';
+      result = result.slice(0, insertPos) + equationBlock + result.slice(insertPos);
+    } else {
+      result = remaining.join('\n\n') + '\n\n' + result;
+    }
+  }
+
+  return result;
+}
+
+/**
  * Main enhancement function - uses vision AI to improve document extraction
+ *
+ * Strategy:
+ * 1. Check if MuPDF text has garbled math fonts
+ * 2. If yes, use Isaac to extract just the equations
+ * 3. Merge equations back into MuPDF text
+ * 4. Keep MuPDF text for all non-math content
  */
 export async function enhanceWithVision(
   mupdfText: string,
@@ -452,16 +574,43 @@ export async function enhanceWithVision(
   apiKey: string
 ): Promise<string> {
   try {
-    // Use quick extraction for speed, fall back to full analysis if needed
-    const visionText = await quickExtract(imageBase64, apiKey);
+    // Import math detector to check for garbled content
+    const { hasGarbledMathFont, shouldRecommendVisionAI } = await import('./mathDetector');
 
-    // If vision AI produced good output, use it
-    if (visionText && visionText.length > 50) {
-      return visionText;
+    // Check if we have garbled math that needs fixing
+    const recommendation = shouldRecommendVisionAI(mupdfText);
+
+    if (!recommendation.recommend && !hasGarbledMathFont(mupdfText)) {
+      // No garbled math - just return MuPDF text as-is
+      console.log('[Vision] No garbled math detected, using MuPDF text');
+      return mupdfText;
     }
 
-    // Fall back to MuPDF text
-    return mupdfText;
+    console.log('[Vision] Garbled math detected, extracting equations with Isaac');
+
+    // Extract equations from the page image
+    const { equations, success } = await extractMathFromImage(imageBase64, apiKey);
+
+    if (!success || equations.length === 0) {
+      console.log('[Vision] No equations extracted, using MuPDF text');
+      return mupdfText;
+    }
+
+    // Patterns that indicate garbled math in MuPDF output
+    const garbledPatterns = [
+      // Replacement characters with surrounding content
+      /[A-Za-z()\[\]]*[\uFFFD\uE000-\uF8FF][A-Za-z0-9\s()+=\-]*[\uFFFD\uE000-\uF8FF]?[A-Za-z0-9()=\-]*/g,
+      // Common garbled subscript pattern like "ℎ>@" or "J>"
+      /[A-Za-z][>@][A-Za-z\s]*/g,
+      // Sequences with unusual math-like punctuation
+      /[A-Za-z]+\s*[><=@]\s*[A-Za-z\uFFFD]+/g,
+    ];
+
+    // Merge the extracted equations into the text
+    const enhanced = mergeEquationsIntoText(mupdfText, equations, garbledPatterns);
+
+    console.log('[Vision] Enhanced text with extracted equations');
+    return enhanced;
   } catch (error) {
     console.warn('Vision AI enhancement failed:', error);
     return mupdfText;
@@ -667,22 +816,66 @@ export interface HybridAnalysisResult {
 }
 
 /**
- * Hybrid analysis - uses MuPDF text content with Vision AI for layout verification and images
+ * Hybrid analysis - uses MuPDF text content with Vision AI for:
+ * 1. Image detection and extraction
+ * 2. Math equation enhancement (when garbled math detected)
+ *
  * Returns markdown with image placeholders and images stored separately
  */
 export async function hybridAnalysis(
   mupdfText: string,
-  _imageBase64: string,
-  _apiKey: string,
+  imageBase64: string,
+  apiKey: string,
   extractedImages?: Map<number, string>,
   structure?: { headlines: Array<{ text: string; level: number; order: number }>; images: ImageRegion[] },
   pageNumber: number = 1
 ): Promise<HybridAnalysisResult> {
   const resultImages: ExtractedImage[] = [];
 
-  // If no structure provided or no images, just return MuPDF text
+  // First, enhance math if needed
+  let enhancedText = mupdfText;
+  try {
+    const { hasGarbledMathFont } = await import('./mathDetector');
+    if (hasGarbledMathFont(mupdfText)) {
+      console.log(`[Hybrid Page ${pageNumber}] Garbled math detected, enhancing with Vision AI`);
+      const { equations, success } = await extractMathFromImage(imageBase64, apiKey);
+
+      if (success && equations.length > 0) {
+        // Patterns that indicate garbled math in MuPDF output
+        const garbledPatterns = [
+          /[A-Za-z()\[\]]*[\uFFFD\uE000-\uF8FF][A-Za-z0-9\s()+=\-]*[\uFFFD\uE000-\uF8FF]?[A-Za-z0-9()=\-]*/g,
+          /[A-Za-z][>@][A-Za-z\s]*/g,
+          /[A-Za-z]+\s*[><=@]\s*[A-Za-z\uFFFD]+/g,
+        ];
+
+        let tempText = mupdfText;
+        let equationIndex = 0;
+
+        for (const pattern of garbledPatterns) {
+          if (equationIndex >= equations.length) break;
+          const matches = tempText.match(pattern);
+          if (matches) {
+            for (const match of matches) {
+              if (equationIndex >= equations.length) break;
+              tempText = tempText.replace(match, equations[equationIndex]);
+              equationIndex++;
+            }
+          }
+        }
+
+        if (equationIndex > 0) {
+          enhancedText = tempText;
+          console.log(`[Hybrid Page ${pageNumber}] Replaced ${equationIndex} garbled patterns with equations`);
+        }
+      }
+    }
+  } catch (error) {
+    console.warn(`[Hybrid Page ${pageNumber}] Math enhancement failed:`, error);
+  }
+
+  // If no structure provided or no images, return enhanced text
   if (!structure || structure.images.length === 0) {
-    return { markdown: mupdfText, images: [] };
+    return { markdown: enhancedText, images: [] };
   }
 
   console.log('hybridAnalysis: structure has', structure.images.length, 'images');
@@ -720,7 +913,7 @@ export async function hybridAnalysis(
 
   // If we have valid images, insert placeholders after the first heading
   if (validImages.length > 0) {
-    const paragraphs = mupdfText.split(/\n\n+/);
+    const paragraphs = enhancedText.split(/\n\n+/);
     const result: string[] = [];
     let imagesInserted = false;
 
@@ -753,7 +946,7 @@ export async function hybridAnalysis(
   }
 
   // No valid extracted images - just add descriptions as placeholders
-  const paragraphs = mupdfText.split(/\n\n+/);
+  const paragraphs = enhancedText.split(/\n\n+/);
   const result: string[] = [];
   let descriptionsAdded = false;
 

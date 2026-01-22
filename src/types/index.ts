@@ -17,6 +17,7 @@ export interface PDFFile {
   error?: string;
   pageCount?: number;
   currentPage?: number;
+  createdAt?: Date;
 }
 
 export interface ProcessingOptions {
@@ -28,6 +29,13 @@ export interface ProcessingOptions {
   useVisionAI: boolean;
   visionAPIKey: string;
   visionMode: 'quick' | 'full' | 'hybrid'; // quick = single call, full = multi-call layout, hybrid = text + images fused
+  // Advanced text processing
+  detectTables: boolean;
+  detectMath: boolean;
+  removeHeadersFooters: boolean;
+  fixHyphenation: boolean;
+  // Password for encrypted PDFs
+  pdfPassword?: string;
 }
 
 export interface VisionAnalysis {
@@ -58,6 +66,15 @@ export interface PageResult {
   text: string;
   hasImages: boolean;
   extractedImages?: ExtractedImage[];
+}
+
+export interface ProcessingStats {
+  wordCount: number;
+  headingCount: number;
+  tableCount: number;
+  listItemCount: number;
+  imageCount: number;
+  pageCount: number;
 }
 
 // Project system types

@@ -1,0 +1,251 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PDF2MKDWN Integration Tests</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      max-width: 1200px;
+      margin: 0 auto;
+      padding: 20px;
+      background: #f5f5f5;
+    }
+    h1 { color: #333; }
+    .test-suite {
+      background: white;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .test-case {
+      border-left: 4px solid #ddd;
+      padding: 10px 15px;
+      margin: 10px 0;
+    }
+    .test-case.pass { border-color: #4caf50; background: #e8f5e9; }
+    .test-case.fail { border-color: #f44336; background: #ffebee; }
+    .test-case.running { border-color: #2196f3; background: #e3f2fd; }
+    .test-name { font-weight: bold; }
+    .test-details { font-size: 0.9em; color: #666; margin-top: 5px; }
+    pre {
+      background: #263238;
+      color: #aed581;
+      padding: 15px;
+      border-radius: 4px;
+      overflow-x: auto;
+      max-height: 300px;
+    }
+    button {
+      background: #2196f3;
+      color: white;
+      border: none;
+      padding: 10px 20px;
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 16px;
+    }
+    button:hover { background: #1976d2; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
+    .file-input { margin: 20px 0; }
+    .summary {
+      font-size: 1.2em;
+      padding: 15px;
+      background: #333;
+      color: white;
+      border-radius: 4px;
+      margin-top: 20px;
+    }
+    .summary.pass { background: #4caf50; }
+    .summary.fail { background: #f44336; }
+  </style>
+</head>
+<body>
+  <h1>PDF2MKDWN Integration Tests</h1>
+  <p>This test suite validates the PDF processing pipeline with real PDF files.</p>
+
+  <div class="file-input">
+    <h3>Test PDFs</h3>
+    <p>Upload PDF files to test:</p>
+    <input type="file" id="pdfInput" multiple accept=".pdf">
+    <button id="runTests" onclick="runAllTests()">Run Tests</button>
+  </div>
+
+  <div id="testResults"></div>
+  <div id="summary" class="summary" style="display:none;"></div>
+
+  <script type="module">
+    // Import the processing utilities
+    // Note: This test is designed to run in the context of the dev server
+    // Run: npm run dev, then open this file
+
+    let testResults = [];
+
+    // Test definitions
+    const testCases = [
+      {
+        name: 'Table Detection - Tables Sample PDF',
+        fileHint: 'tables',
+        checks: [
+          { name: 'Contains pipe table syntax', check: (md) => md.includes('|') },
+          { name: 'Has table rows', check: (md) => (md.match(/\|.*\|/g) || []).length > 3 },
+          { name: 'Has header separator', check: (md) => md.includes('---') || md.includes('| -') },
+        ]
+      },
+      {
+        name: 'Math Detection - Math Paper PDF',
+        fileHint: 'math',
+        checks: [
+          { name: 'Contains LaTeX math delimiters or symbols', check: (md) =>
+            md.includes('$') || md.includes('\\') || /[\u0391-\u03C9]/.test(md)
+          },
+          { name: 'Has equation-like patterns', check: (md) =>
+            /[a-zA-Z]\s*=\s*[^,\n]+/.test(md)
+          },
+        ]
+      },
+      {
+        name: 'Text Extraction - Science Data Tables',
+        fileHint: 'science',
+        checks: [
+          { name: 'Extracts text content', check: (md) => md.length > 100 },
+          { name: 'Has paragraph structure', check: (md) => md.includes('\n\n') },
+        ]
+      },
+      {
+        name: 'General Processing',
+        fileHint: '*',
+        checks: [
+          { name: 'Produces non-empty output', check: (md) => md.trim().length > 0 },
+          { name: 'No excessive whitespace', check: (md) => !md.includes('\n\n\n\n') },
+          { name: 'Valid markdown structure', check: (md) =>
+            !md.includes('undefined') && !md.includes('[object Object]')
+          },
+        ]
+      }
+    ];
+
+    window.runAllTests = async function() {
+      const input = document.getElementById('pdfInput');
+      const files = Array.from(input.files || []);
+
+      if (files.length === 0) {
+        alert('Please select at least one PDF file to test.');
+        return;
+      }
+
+      const resultsDiv = document.getElementById('testResults');
+      resultsDiv.innerHTML = '<h2>Running Tests...</h2>';
+
+      let passed = 0;
+      let failed = 0;
+      const results = [];
+
+      for (const file of files) {
+        resultsDiv.innerHTML += `
+          <div class="test-suite">
+            <h3>Processing: ${file.name}</h3>
+            <div id="file-${file.name.replace(/\W/g, '_')}" class="test-case running">
+              <div class="test-name">Processing PDF...</div>
+            </div>
+          </div>
+        `;
+
+        try {
+          // Dynamic import to work with the dev server
+          const { processPDF } = await import('/src/utils/pdfProcessor.ts');
+
+          const options = {
+            language: 'eng',
+            preserveLayout: false,
+            extractImages: false,
+            ocrEnabled: false,
+            useVisionAI: false,
+            visionAPIKey: '',
+            visionMode: 'hybrid',
+            detectTables: true,
+            detectMath: true,
+            removeHeadersFooters: true,
+            fixHyphenation: true,
+          };
+
+          const result = await processPDF(file, options);
+          const markdown = result.markdown;
+
+          // Find applicable test cases
+          const applicableTests = testCases.filter(tc =>
+            tc.fileHint === '*' || file.name.toLowerCase().includes(tc.fileHint)
+          );
+
+          let fileHtml = `<h3>${file.name}</h3>`;
+
+          for (const testCase of applicableTests) {
+            fileHtml += `<div class="test-suite"><h4>${testCase.name}</h4>`;
+
+            for (const check of testCase.checks) {
+              const checkPassed = check.check(markdown);
+              if (checkPassed) passed++;
+              else failed++;
+
+              fileHtml += `
+                <div class="test-case ${checkPassed ? 'pass' : 'fail'}">
+                  <div class="test-name">${check.name}</div>
+                  <div class="test-details">${checkPassed ? '✓ PASS' : '✗ FAIL'}</div>
+                </div>
+              `;
+            }
+
+            fileHtml += '</div>';
+          }
+
+          // Show preview of output
+          fileHtml += `
+            <details>
+              <summary>View Output (${markdown.length} chars)</summary>
+              <pre>${escapeHtml(markdown.substring(0, 2000))}${markdown.length > 2000 ? '\n...(truncated)' : ''}</pre>
+            </details>
+          `;
+
+          const fileDiv = document.getElementById(`file-${file.name.replace(/\W/g, '_')}`);
+          if (fileDiv) {
+            fileDiv.outerHTML = fileHtml;
+          }
+
+          results.push({ file: file.name, markdown, success: true });
+
+        } catch (error) {
+          failed++;
+          const fileDiv = document.getElementById(`file-${file.name.replace(/\W/g, '_')}`);
+          if (fileDiv) {
+            fileDiv.className = 'test-case fail';
+            fileDiv.innerHTML = `
+              <div class="test-name">Processing Failed</div>
+              <div class="test-details">${error.message}</div>
+            `;
+          }
+
+          results.push({ file: file.name, error: error.message, success: false });
+        }
+      }
+
+      // Show summary
+      const summaryDiv = document.getElementById('summary');
+      summaryDiv.style.display = 'block';
+      summaryDiv.className = `summary ${failed > 0 ? 'fail' : 'pass'}`;
+      summaryDiv.innerHTML = `
+        <strong>Test Summary:</strong> ${passed} passed, ${failed} failed
+      `;
+    };
+
+    function escapeHtml(text) {
+      return text
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+  </script>
+</body>
+</html>

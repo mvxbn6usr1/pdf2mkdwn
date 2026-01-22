@@ -184,7 +184,10 @@ function App() {
             <div className={`panel-content ${isNarrowScreen && activeTab === 'upload' ? 'upload-tab-active' : ''}`}>
               {isNarrowScreen && activeTab === 'upload' ? (
                 <>
-                  <FileUpload onFilesSelected={addFiles} disabled={isProcessing} />
+                  <FileUpload onFilesSelected={(newFiles) => {
+                    addFiles(newFiles);
+                    setActiveTab('documents');
+                  }} disabled={isProcessing} />
                   <ProcessingOptions
                     options={options}
                     onChange={setOptions}

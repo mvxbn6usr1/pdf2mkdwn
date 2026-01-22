@@ -1,6 +1,8 @@
 import { useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkMath from 'remark-math';
+import rehypeKatex from 'rehype-katex';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Eye, Code, Copy, Download, Check } from 'lucide-react';
@@ -8,6 +10,7 @@ import { open } from '@tauri-apps/plugin-shell';
 import logo from '../assets/logo.png';
 import type { PDFFile, ExtractedImage } from '../types';
 import { downloadMarkdown, copyToClipboard } from '../utils/exportUtils';
+import 'katex/dist/katex.min.css';
 
 interface MarkdownPreviewProps {
   file: PDFFile | null;
@@ -125,7 +128,8 @@ export function MarkdownPreview({ file }: MarkdownPreviewProps) {
         {viewMode === 'preview' ? (
           <div className="markdown-rendered">
             <ReactMarkdown
-              remarkPlugins={[remarkGfm]}
+              remarkPlugins={[remarkGfm, remarkMath]}
+              rehypePlugins={[rehypeKatex]}
               components={{
                 a({ href, children, ...props }) {
                   const handleClick = (e: React.MouseEvent<HTMLAnchorElement>) => {

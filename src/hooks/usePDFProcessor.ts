@@ -17,6 +17,11 @@ const defaultOptions: ProcessingOptions = {
   useVisionAI: false,
   visionAPIKey: '',
   visionMode: 'hybrid',
+  // Advanced text processing - enabled by default for best results
+  detectTables: true,
+  detectMath: true,
+  removeHeadersFooters: true,
+  fixHyphenation: true,
 };
 
 interface UsePDFProcessorOptions {
@@ -90,19 +95,22 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
       try {
         const storedFiles = await getFilesByProject(projectId);
         // Convert StoredFile to PDFFile (without the actual File object)
-        const pdfFiles: PDFFile[] = storedFiles.map((sf) => ({
-          id: sf.id,
-          file: null, // No file object for persisted files
-          name: sf.name,
-          size: sf.size,
-          status: sf.status === 'pending' ? 'pending' : sf.status === 'completed' ? 'completed' : 'error',
-          progress: sf.status === 'completed' ? 100 : 0,
-          markdown: sf.markdown,
-          extractedImages: sf.extractedImages,
-          error: sf.error,
-          pageCount: sf.pageCount,
-          currentPage: sf.status === 'completed' ? sf.pageCount : 0,
-        }));
+        const pdfFiles: PDFFile[] = storedFiles
+          .map((sf) => ({
+            id: sf.id,
+            file: null, // No file object for persisted files
+            name: sf.name,
+            size: sf.size,
+            status: (sf.status === 'pending' ? 'pending' : sf.status === 'completed' ? 'completed' : 'error') as PDFFile['status'],
+            progress: sf.status === 'completed' ? 100 : 0,
+            markdown: sf.markdown,
+            extractedImages: sf.extractedImages,
+            error: sf.error,
+            pageCount: sf.pageCount,
+            currentPage: sf.status === 'completed' ? sf.pageCount : 0,
+            createdAt: sf.createdAt,
+          }))
+          .sort((a, b) => (b.createdAt?.getTime() || 0) - (a.createdAt?.getTime() || 0));
         setFiles(pdfFiles);
       } catch (error) {
         console.error('Failed to load files:', error);
@@ -132,6 +140,7 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
             markdown: '',
             pageCount,
             currentPage: 0,
+            createdAt: new Date(),
           };
         })
     );
@@ -139,7 +148,7 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
     // Don't persist pending files to IndexedDB - only persist after successful processing
     // This avoids storing entries that were never actually converted
 
-    setFiles((prev) => [...prev, ...pdfFiles]);
+    setFiles((prev) => [...pdfFiles, ...prev]);
   }, []);
 
   const removeFile = useCallback(async (id: string) => {
@@ -205,7 +214,15 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
         await dbUpdateFile(storedFile);
         onFilesChanged?.();
       } catch (error) {
-        const errorMsg = error instanceof Error ? error.message : 'Unknown error';
+        let errorMsg = error instanceof Error ? error.message : 'Unknown error';
+
+        // Provide user-friendly error messages for specific errors
+        if (errorMsg === 'PDF_PASSWORD_REQUIRED') {
+          errorMsg = 'This PDF is password-protected. Please provide the password in processing options.';
+        } else if (errorMsg === 'PDF_PASSWORD_INCORRECT') {
+          errorMsg = 'Incorrect PDF password. Please check and try again.';
+        }
+
         updateFile(file.id, {
           status: 'error',
           error: errorMsg,

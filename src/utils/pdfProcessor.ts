@@ -1,6 +1,6 @@
 import * as mupdf from 'mupdf';
 import { createWorker, type Worker } from 'tesseract.js';
-import type { PageResult, ProcessingOptions, ExtractedImage } from '../types';
+import type { PageResult, ProcessingOptions, ExtractedImage, ProcessingStats } from '../types';
 import {
   enhanceWithVision,
   fullAnalysis,
@@ -9,6 +9,34 @@ import {
   getDocumentStructure,
   extractImageRegions,
 } from './visionProcessor';
+import {
+  detectTables,
+  tableToMarkdown,
+  detectTablesFromPositionedRows,
+  type PositionedRow as TablePositionedRow,
+} from './tableDetector';
+import {
+  processMathInText,
+  containsMath,
+  shouldRecommendVisionAI,
+} from './mathDetector';
+import {
+  detectHeaderFooterPatterns,
+  removeHeadersFooters,
+  fixHyphenationAdvanced,
+  defragmentLines,
+  mergeBulletLines,
+  calculateStats,
+  type PageLines,
+} from './textTransforms';
+import {
+  analyzePageLayout,
+  createPositionedLine,
+  shouldProcessAsTable,
+  hasMultiColumnProseLayout,
+  type PositionedLine as LayoutPositionedLine,
+  type PageLayout,
+} from './layoutAnalyzer';
 
 let tesseractWorker: Worker | null = null;
 
@@ -59,6 +87,147 @@ interface StructuredTextBlock {
 
 interface StructuredTextPage {
   blocks: StructuredTextBlock[];
+}
+
+// Types for character-level extraction (used for accurate table detection)
+interface PositionedChar {
+  char: string;
+  x: number;
+  y: number;
+  fontSize: number;
+}
+
+interface PositionedLine {
+  chars: PositionedChar[];
+  y: number;
+  minX: number;
+  maxX: number;
+}
+
+interface PositionedCell {
+  text: string;
+  x: number;
+  width: number;
+}
+
+interface PositionedRow {
+  cells: PositionedCell[];
+  y: number;
+}
+
+/**
+ * Extract character-level positions from structured text using walker.
+ * This provides accurate x-coordinates for table column detection.
+ */
+function extractPositionedChars(structuredText: mupdf.StructuredText): PositionedLine[] {
+  const lines: PositionedLine[] = [];
+  let currentLine: PositionedChar[] = [];
+  let currentY = -1;
+  let lineMinX = Infinity;
+  let lineMaxX = -Infinity;
+
+  structuredText.walk({
+    beginLine(bbox: mupdf.Rect, _wmode: number, _direction: mupdf.Point) {
+      currentLine = [];
+      currentY = bbox[1]; // y coordinate (top of line)
+      lineMinX = bbox[0];
+      lineMaxX = bbox[2];
+    },
+    onChar(c: string, origin: mupdf.Point, _font: mupdf.Font, size: number, _quad: mupdf.Quad, _color: mupdf.Color) {
+      currentLine.push({
+        char: c,
+        x: origin[0],
+        y: origin[1],
+        fontSize: size,
+      });
+    },
+    endLine() {
+      if (currentLine.length > 0) {
+        lines.push({
+          chars: currentLine,
+          y: currentY,
+          minX: lineMinX,
+          maxX: lineMaxX,
+        });
+      }
+      currentLine = [];
+    },
+  });
+
+  return lines;
+}
+
+/**
+ * Cluster characters into cells based on x-coordinate gaps.
+ * This is similar to how pdfmd detects columns.
+ */
+function clusterCharsIntoCells(line: PositionedLine, gapThreshold: number): PositionedCell[] {
+  if (line.chars.length === 0) return [];
+
+  // Sort characters by x position
+  const sortedChars = [...line.chars].sort((a, b) => a.x - b.x);
+
+  const cells: PositionedCell[] = [];
+  let currentCell: PositionedChar[] = [sortedChars[0]];
+
+  for (let i = 1; i < sortedChars.length; i++) {
+    const prev = sortedChars[i - 1];
+    const curr = sortedChars[i];
+    const gap = curr.x - prev.x;
+
+    // Average character width estimate based on font size
+    const avgCharWidth = prev.fontSize * 0.6;
+
+    // If gap is larger than threshold times the expected char width, start new cell
+    if (gap > avgCharWidth * gapThreshold) {
+      // End current cell
+      const text = currentCell.map(c => c.char).join('');
+      const cellX = currentCell[0].x;
+      const cellWidth = currentCell[currentCell.length - 1].x - cellX + avgCharWidth;
+      cells.push({ text, x: cellX, width: cellWidth });
+      currentCell = [curr];
+    } else {
+      currentCell.push(curr);
+    }
+  }
+
+  // Don't forget the last cell
+  if (currentCell.length > 0) {
+    const text = currentCell.map(c => c.char).join('');
+    const avgCharWidth = currentCell[0].fontSize * 0.6;
+    const cellX = currentCell[0].x;
+    const cellWidth = currentCell[currentCell.length - 1].x - cellX + avgCharWidth;
+    cells.push({ text, x: cellX, width: cellWidth });
+  }
+
+  return cells;
+}
+
+/**
+ * Group lines into rows and detect potential table structure based on column alignment.
+ * Returns row data with cells and their x-positions for table detection.
+ */
+function detectTableStructure(
+  positionedLines: PositionedLine[],
+  _pageWidth: number
+): PositionedRow[] {
+  // Use a gap threshold that's generous enough to detect multi-space gaps
+  // but not so small that it splits words (2.5x character width seems good)
+  const gapThreshold = 2.5;
+
+  const rows: PositionedRow[] = [];
+
+  for (const line of positionedLines) {
+    const cells = clusterCharsIntoCells(line, gapThreshold);
+    if (cells.length > 0) {
+      rows.push({
+        cells,
+        y: line.y,
+      });
+    }
+  }
+
+  return rows;
 }
 
 interface ProcessedLine {
@@ -311,10 +480,43 @@ function shouldMergeBlocks(
   return false;
 }
 
+interface MarkdownConversionOptions {
+  preserveLayout: boolean;
+  detectTables?: boolean;
+  detectMath?: boolean;
+  pageWidth?: number;
+  pageHeight?: number;
+  positionedRows?: PositionedRow[];  // Character-level data for accurate table detection
+  layoutLines?: LayoutPositionedLine[];  // Lines for layout analysis
+}
+
 /**
  * Convert structured text to Markdown using font information
  */
-function structuredTextToMarkdown(json: string, preserveLayout: boolean): string {
+function structuredTextToMarkdown(json: string, conversionOptions: MarkdownConversionOptions): string {
+  const {
+    preserveLayout,
+    detectTables: shouldDetectTables,
+    detectMath: shouldDetectMath,
+    pageWidth = 612,
+    pageHeight = 792,
+    positionedRows,
+    layoutLines
+  } = conversionOptions;
+
+  // CRITICAL: Perform layout analysis FIRST before any content detection
+  // This determines page structure (columns, regions) to prevent false positives
+  let pageLayout: PageLayout | null = null;
+  if (layoutLines && layoutLines.length > 0) {
+    pageLayout = analyzePageLayout(layoutLines, pageWidth, pageHeight);
+    // Debug: Log layout analysis results
+    console.log(`[Layout] Analyzed ${layoutLines.length} lines: ${pageLayout.columns.length} columns, isMultiColumn=${pageLayout.isMultiColumn}`);
+    if (pageLayout.isMultiColumn) {
+      console.log(`[Layout] Multi-column detected - will restrict table detection`);
+    }
+  } else {
+    console.log(`[Layout] No layout lines available for analysis`);
+  }
   const data: StructuredTextPage = JSON.parse(json);
 
   // Sort blocks by vertical position (top to bottom) for correct reading order
@@ -556,6 +758,97 @@ function structuredTextToMarkdown(json: string, preserveLayout: boolean): string
 
   let markdown = mergedParagraphs.join('\n\n');
 
+  // Table detection: Use layout analysis to guide table detection
+  if (shouldDetectTables) {
+    let detectedTablesResult: ReturnType<typeof detectTables> = [];
+
+    // CRITICAL: Check if this is a multi-column prose layout (like academic papers)
+    // If so, DON'T try to detect the columns as tables - this is the main false positive source
+    const isMultiColumnProse = pageLayout && hasMultiColumnProseLayout(pageLayout);
+
+    console.log(`[Table Detection] pageLayout=${!!pageLayout}, isMultiColumnProse=${isMultiColumnProse}`);
+    if (pageLayout) {
+      console.log(`[Table Detection] Regions: ${pageLayout.regions.map(r => `${r.type}(${r.confidence.toFixed(2)})`).join(', ')}`);
+    }
+
+    if (isMultiColumnProse) {
+      // For multi-column prose layouts, only look for tables in regions
+      // explicitly classified as potential-table
+      if (pageLayout) {
+        for (const region of pageLayout.regions) {
+          if (shouldProcessAsTable(region)) {
+            // This region looks like a table, process it
+            const regionLines = region.blocks.flatMap(block =>
+              block.lines.map(line => ({
+                text: line.text,
+                y: line.y,
+                x: line.minX,
+                width: line.maxX - line.minX,
+                fontSize: line.avgFontSize,
+              }))
+            );
+            const regionTables = detectTables(regionLines, pageWidth);
+            detectedTablesResult.push(...regionTables);
+          }
+        }
+      }
+    } else {
+      // Single-column or unknown layout - use standard detection
+
+      // Prefer positioned rows detection (uses actual character x-coordinates)
+      if (positionedRows && positionedRows.length >= 2) {
+        // Convert to the tableDetector's PositionedRow type
+        const tableRows: TablePositionedRow[] = positionedRows.map(row => ({
+          cells: row.cells.map(cell => ({
+            text: cell.text,
+            x: cell.x,
+            width: cell.width,
+          })),
+          y: row.y,
+        }));
+
+        detectedTablesResult = detectTablesFromPositionedRows(tableRows);
+      }
+
+      // Fallback to text-line based detection if no tables found
+      if (detectedTablesResult.length === 0) {
+        const textLines = sortedBlocks.flatMap(block => {
+          if (!block.lines) return [];
+          return block.lines
+            .filter(l => l.text && l.text.trim())
+            .map(l => ({
+              text: l.text,
+              y: l.y || block.bbox?.y || 0,
+              x: l.x || block.bbox?.x || 0,
+              width: block.bbox?.w || 100,
+              fontSize: l.font?.size || 12,
+            }));
+        });
+
+        detectedTablesResult = detectTables(textLines, pageWidth);
+      }
+    }
+
+    if (detectedTablesResult.length > 0) {
+      // Insert detected tables into the markdown
+      for (const table of detectedTablesResult) {
+        if (table.confidence > 0.5) {
+          const tableMarkdown = tableToMarkdown(table);
+          // Try to find where this table should be inserted based on line numbers
+          // For simplicity, we'll append tables that weren't already detected
+          if (!markdown.includes('|') || table.rows.length >= 3) {
+            markdown += '\n\n' + tableMarkdown;
+          }
+        }
+      }
+    }
+  }
+
+  // Math detection: process text for mathematical expressions
+  if (shouldDetectMath && containsMath(markdown)) {
+    markdown = processMathInText(markdown);
+  }
+
   // Clean up multiple consecutive newlines
   if (!preserveLayout) {
     markdown = markdown.replace(/\n{3,}/g, '\n\n');
@@ -659,8 +952,18 @@ export async function processPDFPage(
 ): Promise<PageResult> {
   const page = doc.loadPage(pageIndex);
 
+  // Get page bounds for accurate table detection
+  const bounds = page.getBounds();
+  const pageWidth = bounds[2] - bounds[0];
+
   // Get structured text from MuPDF
-  const structuredText = page.toStructuredText('preserve-whitespace');
+  // Options:
+  // - preserve-whitespace: Keep whitespace for layout detection
+  // - preserve-ligatures: Don't expand ligatures (helps with math fonts)
+  // - preserve-spans: Keep font info within lines (needed for JSON output)
+  // Note: use-cid-for-unknown-unicode and use-gid-for-unknown-unicode can help
+  // with embedded fonts, but may produce different character codes
+  const structuredText = page.toStructuredText('preserve-whitespace,preserve-ligatures,preserve-spans');
   let markdown = '';
   let hasImages = false;
   let extractedImagesList: ExtractedImage[] = [];
@@ -671,7 +974,52 @@ export async function processPDFPage(
   if (simpleText.trim().length > 0) {
     // Use structured JSON for proper markdown conversion with font info
     const json = structuredText.asJSON();
-    markdown = structuredTextToMarkdown(json, options.preserveLayout);
+
+    // Get page height for layout analysis
+    const pageHeight = bounds[3] - bounds[1];
+
+    // Extract character-level positions for layout analysis and table detection
+    let positionedRows: PositionedRow[] | undefined;
+    let layoutLines: LayoutPositionedLine[] | undefined;
+
+    if (options.detectTables) {
+      const positionedLines = extractPositionedChars(structuredText);
+      positionedRows = detectTableStructure(positionedLines, pageWidth);
+
+      // Convert to layout analyzer format for holistic page analysis
+      layoutLines = positionedLines.map(line => createPositionedLine(
+        line.chars.map(c => ({
+          char: c.char,
+          x: c.x,
+          y: c.y,
+          fontSize: c.fontSize,
+        })),
+        line.y,
+        line.minX,
+        line.maxX
+      ));
+    }
+
+    markdown = structuredTextToMarkdown(json, {
+      preserveLayout: options.preserveLayout,
+      detectTables: options.detectTables,
+      detectMath: options.detectMath,
+      pageWidth,
+      pageHeight,
+      positionedRows,
+      layoutLines,
+    });
+  }
+
+  // Check for garbled math fonts that need Vision AI
+  const visionRecommendation = shouldRecommendVisionAI(markdown);
+  if (visionRecommendation.recommend && !options.useVisionAI) {
+    console.warn(
+      `[Page ${pageIndex + 1}] ${visionRecommendation.reason}`,
+      visionRecommendation.garbledPercentage
+        ? `(~${visionRecommendation.garbledPercentage}% garbled)`
+        : ''
+    );
   }
 
   // If no text found or OCR is enabled, use OCR as fallback
@@ -732,15 +1080,28 @@ export async function processPDFPage(
   };
 }
 
-export async function loadPDF(file: File): Promise<mupdf.Document> {
+export async function loadPDF(file: File, password?: string): Promise<mupdf.Document> {
   const arrayBuffer = await file.arrayBuffer();
   const doc = mupdf.Document.openDocument(arrayBuffer, 'application/pdf');
+
+  // Handle password-protected PDFs
+  if (doc.needsPassword()) {
+    if (!password) {
+      throw new Error('PDF_PASSWORD_REQUIRED');
+    }
+    const authenticated = doc.authenticatePassword(password);
+    if (!authenticated) {
+      throw new Error('PDF_PASSWORD_INCORRECT');
+    }
+  }
+
   return doc;
 }
 
 export interface ProcessPDFResult {
   markdown: string;
   extractedImages: ExtractedImage[];
+  stats?: ProcessingStats;
 }
 
 export async function processPDF(
@@ -748,27 +1109,71 @@ export async function processPDF(
   options: ProcessingOptions,
   onProgress?: (current: number, total: number) => void
 ): Promise<ProcessPDFResult> {
-  const doc = await loadPDF(file);
+  const doc = await loadPDF(file, options.pdfPassword);
   const totalPages = doc.countPages();
   const pageResults: PageResult[] = [];
 
+  // First pass: process all pages
   for (let i = 0; i < totalPages; i++) {
     const result = await processPDFPage(doc, i, options);
     pageResults.push(result);
     onProgress?.(i + 1, totalPages);
   }
 
+  // Header/Footer detection (cross-page analysis)
+  let headers: string[] = [];
+  let footers: string[] = [];
+
+  if (options.removeHeadersFooters && totalPages >= 3) {
+    // Collect first and last lines from each page for pattern detection
+    const pageLines: PageLines[] = pageResults.map((result, idx) => {
+      const lines = result.text.split('\n').filter(l => l.trim());
+      return {
+        pageNumber: idx + 1,
+        firstLines: lines.slice(0, 3),
+        lastLines: lines.slice(-3),
+      };
+    });
+
+    const patterns = detectHeaderFooterPatterns(pageLines);
+    headers = patterns.headers;
+    footers = patterns.footers;
+  }
+
   // Combine all pages into a single markdown document
-  // Join with double newlines - no page markers to preserve document flow
-  const markdown = pageResults
-    .map((result) => result.text)
+  let markdown = pageResults
+    .map((result) => {
+      let text = result.text;
+
+      // Remove detected headers/footers from this page
+      if (options.removeHeadersFooters && (headers.length > 0 || footers.length > 0)) {
+        text = removeHeadersFooters(text, headers, footers);
+      }
+
+      return text;
+    })
     .filter((text) => text.trim())
     .join('\n\n');
+
+  // Apply text transforms
+  if (options.fixHyphenation) {
+    markdown = fixHyphenationAdvanced(markdown);
+  }
+
+  // Apply line defragmentation and bullet merging (always beneficial)
+  markdown = mergeBulletLines(markdown);
+  markdown = defragmentLines(markdown);
+
+  // Clean up excessive whitespace
+  markdown = markdown.replace(/\n{3,}/g, '\n\n').trim();
 
   // Combine all extracted images from all pages
   const extractedImages = pageResults.flatMap((result) => result.extractedImages || []);
 
-  return { markdown, extractedImages };
+  // Calculate processing statistics
+  const stats = calculateStats(markdown, totalPages);
+
+  return { markdown, extractedImages, stats };
 }
 
 export async function getPDFPageCount(file: File): Promise<number> {
