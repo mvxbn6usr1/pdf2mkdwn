@@ -1231,6 +1231,18 @@ body {
   cursor: not-allowed;
 }
 
+.file-upload.drag-over {
+  border-color: var(--accent);
+  transform: translateY(-2px);
+  box-shadow:
+    var(--shadow-lg),
+    inset 0 0 20px var(--accent-subtle);
+}
+
+.file-upload.drag-over::before {
+  opacity: 1;
+}
+
 .upload-content {
   display: flex;
   flex-direction: column;
