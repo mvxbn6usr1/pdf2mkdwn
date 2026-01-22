@@ -1,6 +1,11 @@
-# PDF to Markdown
+<div align="center">
+  <img src="src/assets/Icon-iOS-Dark-1024x1024@1x.png" width="128" height="128" alt="PDF to Markdown Icon">
+  <h1>PDF to Markdown</h1>
+</div>
 
 This is a desktop application built to convert PDF documents into clean, structured Markdown. It uses Tauri for the desktop environment and React for the interface, focusing on a tactile, skeuomorphic design.
+
+Despite the rich interface and OCR capabilities, the compiled macOS application is highly optimized, coming in at only 18.5 MB.
 
 ![App Screenshot](src/assets/image.png)
 
@@ -55,6 +60,8 @@ To create a native executable for your current platform, run:
 ```bash
 npm run tauri:build
 ```
+
+The resulting macOS bundle is notably small (18.5 MB) thanks to Tauri's use of the system's native webview.
 
 ## License
 
