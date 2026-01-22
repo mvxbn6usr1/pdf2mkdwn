@@ -12,6 +12,9 @@ Despite the rich interface and OCR capabilities, the compiled macOS application 
 ## Core Features
 
 - **Accurate Conversion**: Designed to extract text and preserve document layouts as much as possible.
+- **Advanced Table Recognition**: Automatically detects and converts complex PDF tables into clean Markdown tables.
+- **Mathematical Formula Detection**: Identifies and formats mathematical expressions for better readability in Markdown.
+- **Enhanced Layout Analysis**: Improved detection of headers, footers, and page structures.
 - **Skeuomorphic Interface**: A custom-built UI that uses organic textures and liquid glass effects.
 - **OCR Integration**: Uses Tesseract.js to handle text extraction from scanned documents.
 - **Batch Processing**: Supports dragging and dropping multiple files for concurrent processing.
