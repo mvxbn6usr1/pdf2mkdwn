@@ -1,7 +1,17 @@
 import type { VisionAnalysis, VisionImage, VisionElement, ExtractedImage } from '../types';
+import { fetch as tauriFetch } from '@tauri-apps/plugin-http';
 
-// Use proxy in development to avoid CORS
-const ISAAC_API_URL = '/api/replicate/v1/models/perceptron-ai-inc/isaac-0.1/predictions';
+// Actual API URL for production (Tauri fetch bypasses CORS)
+const REPLICATE_API_URL = 'https://api.replicate.com/v1/models/perceptron-ai-inc/isaac-0.1/predictions';
+// Proxy URL for development (Vite handles CORS)
+const PROXY_API_URL = '/api/replicate/v1/models/perceptron-ai-inc/isaac-0.1/predictions';
+
+// Detect if running in Tauri production build
+const isTauriProd = () => {
+  return typeof window !== 'undefined' &&
+    '__TAURI_INTERNALS__' in window &&
+    import.meta.env.PROD;
+};
 
 interface IsaacResponse {
   output?: {
@@ -25,6 +35,7 @@ interface LayoutElement {
 
 /**
  * Call Isaac 01 API with an image
+ * Uses Tauri's native fetch in production to bypass CORS
  */
 async function callIsaacAPI(
   imageBase64: string,
@@ -40,7 +51,12 @@ async function callIsaacAPI(
     }
   };
 
-  const response = await fetch(ISAAC_API_URL, {
+  // Use Tauri fetch in production (bypasses CORS), regular fetch in dev (uses Vite proxy)
+  const useTauriFetch = isTauriProd();
+  const apiUrl = useTauriFetch ? REPLICATE_API_URL : PROXY_API_URL;
+  const fetchFn = useTauriFetch ? tauriFetch : fetch;
+
+  const response = await fetchFn(apiUrl, {
     method: 'POST',
     headers: {
       'Authorization': `Bearer ${apiKey}`,

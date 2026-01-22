@@ -99,7 +99,7 @@ export function FileList({
                   Convert
                 </button>
               )}
-              {(file.status === 'completed' || file.status === 'error') && (
+              {(file.status === 'completed' || file.status === 'error') && file.file && (
                 <button
                   className="file-action-btn retry"
                   onClick={(e) => {

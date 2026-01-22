@@ -3,7 +3,6 @@ import type { PDFFile, ProcessingOptions, StoredFile } from '../types';
 import { processPDF, getPDFPageCount, terminateOCRWorker } from '../utils/pdfProcessor';
 import {
   getFilesByProject,
-  createFile as dbCreateFile,
   updateFile as dbUpdateFile,
   deleteFile as dbDeleteFile,
   saveAPIKey,
@@ -137,26 +136,11 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
         })
     );
 
-    // Save new files to IndexedDB
-    for (const pdfFile of pdfFiles) {
-      const storedFile: StoredFile = {
-        id: pdfFile.id,
-        projectId: currentProjectIdRef.current,
-        name: pdfFile.name,
-        size: pdfFile.size,
-        pageCount: pdfFile.pageCount || 0,
-        status: 'pending',
-        markdown: '',
-        extractedImages: [],
-        createdAt: new Date(),
-        updatedAt: new Date(),
-      };
-      await dbCreateFile(storedFile);
-    }
+    // Don't persist pending files to IndexedDB - only persist after successful processing
+    // This avoids storing entries that were never actually converted
 
     setFiles((prev) => [...prev, ...pdfFiles]);
-    onFilesChanged?.();
-  }, [onFilesChanged]);
+  }, []);
 
   const removeFile = useCallback(async (id: string) => {
     await dbDeleteFile(id);
@@ -226,23 +210,7 @@ export function usePDFProcessor({ projectId, onFilesChanged }: UsePDFProcessorOp
           status: 'error',
           error: errorMsg,
         });
-
-        // Persist error state to IndexedDB
-        const storedFile: StoredFile = {
-          id: file.id,
-          projectId: currentProjectIdRef.current,
-          name: file.name,
-          size: file.size,
-          pageCount: file.pageCount || 0,
-          status: 'error',
-          markdown: '',
-          extractedImages: [],
-          error: errorMsg,
-          createdAt: new Date(),
-          updatedAt: new Date(),
-        };
-        await dbUpdateFile(storedFile);
-        onFilesChanged?.();
+        // Don't persist error state - only successful conversions are saved
       }
     },
     [options, updateFile, onFilesChanged]
